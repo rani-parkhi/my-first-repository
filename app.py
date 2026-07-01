@@ -1,25 +1,20 @@
+import sqlite3
 import os
 import streamlit as st
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
-import csv
 
-if not os.path.exists("expenses.csv"):
-    with open("expenses.csv", "w", newline="") as file:
-        writer = csv.writer(file)
 
-        writer.writerow(
-            ["DateTime", "Category", "Expense Name", "Amount"]
-        )
+def get_connection():
+    conn = sqlite3.connect("expenses.db")
+    return conn
 
 st.write("Current folder:", os.getcwd())
 
 st.title("Expense Tracker")
 
 menu = st.selectbox("Menu", ["Add Expense", "View Expense", "Category Summary", "Expense Chart", "Delete Expense", "Total Spendings"])
-
-file_name = "expenses.txt"
 
 if menu == "Add Expense":
     category = st.selectbox(
@@ -28,103 +23,96 @@ if menu == "Add Expense":
 )
     
     name = st.text_input("Expense Name")
-    amount = st.number_input("Amount", min_value=0)
+    amount = st.number_input("Amount", min_value=0.0, step=1.0)
 
     if st.button("Add"):
-        with open("expenses.csv", "a", newline="") as file:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
 
-            writer = csv.writer(file)
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            writer.writerow([current_time, category, name, amount])
-            
+        cursor.execute(
+            """
+            INSERT INTO expenses (date, category, description, amount)
+            VALUES (?, ?, ?, ?)
+            """,
+            (current_time, category, name, amount)
+            )
 
-        st.success("Expense Added!")
+        conn.commit()
+        conn.close()
+
+        st.success("Expense Added Successfully!")
 
  
 elif menu == "View Expense":
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    try:
-        with open("expenses.csv", "r") as file:
-
-            reader = csv.reader(file)
-
-            next(reader)
-
-            found = False
-
-            for row in reader:
-
-                found = True
-
-                date_time = row[0]
-                category = row[1]
-                name = row[2]
-                amount = row[3]
-
-                st.write(
-                    f"{date_time} | {category} | {name} | ₹{amount}"
-                )
-
-            if not found:
-                st.warning("No expenses found")
-
-    except FileNotFoundError:
+    cursor.execute("SELECT date, category, description, amount FROM expenses")
+    
+    rows = cursor.fetchall()
+    
+    conn.close()
+    
+    if len(rows) == 0:
         st.warning("No expenses found")
+    else:
+        for row in rows:
+            date_time, category, name, amount = row
+            st.write(f"{date_time} | {category} | {name} | ₹{amount}")
 
 
 elif menu == "Category Summary":
     
-    try:
-        summary = {}
+    conn = get_connection()
+    cursor = conn.cursor()
 
-        with open("expenses.csv", "r") as file:
+    cursor.execute("""
+        SELECT category, SUM(amount)
+        FROM expenses
+        GROUP BY Category
+    """)
 
-            reader = csv.reader(file)
+    rows = cursor.fetchall()
 
-            next(reader)  # Skip header
+    conn.close()
 
-            for row in reader:
-
-                category = row[1]
-                amount = int(float(row[3]))
-
-                if category in summary:
-                    summary[category] += amount
-                else:
-                    summary[category] = amount
-
+    if len(rows) == 0:
+        st.warning("No expenses found")
+    else:
         st.subheader("Category Wise Spending")
 
-        for category, total in summary.items():
-            st.metric(category, f"₹{total}")
+        for row in rows:
+            category = row[0]
+            total = row[1]
 
-    except FileNotFoundError:
-        st.warning("No expenses found")
+            st.metric(category, f"₹{total}")
 
 
 elif menu == "Expense Chart":
     
-    try:
-        with open("expenses.csv", "r") as file:
-            reader = csv.reader(file)
-            next(reader)
-            
-            summary = {}
-            
-            for row in reader:
-                
-                category = row[1]
-                amount = int(float(row[3]))
+    conn = get_connection()
+    cursor = conn.cursor()
 
-                if category in summary:
-                    summary[category] += (amount)
-                else:
-                    summary[category] = (amount)
-                    
-                df = pd.DataFrame({ 
-                "Category": summary.keys(),
-                "Amount": summary.values()}
-                )
+    cursor.execute("""
+        SELECT category, SUM(amount)
+        FROM expenses
+        GROUP BY category
+    """)
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    if len(rows) == 0:
+        st.warning("No expenses found")
+
+    else:
+        df = pd.DataFrame(
+            rows,
+            columns=["Category", "Amount"]
+        )
 
         fig = px.pie(
             df,
@@ -135,72 +123,60 @@ elif menu == "Expense Chart":
 
         st.plotly_chart(fig)
 
-    except FileNotFoundError:
-        st.warning("No expenses found")
+               
 
 elif menu == "Delete Expense":
+    conn = get_connection()
+    cursor = conn.cursor()
+
+
+    cursor.execute("SELECT id, date, category, description, amount FROM expenses")
+
+    rows = cursor.fetchall()
+
+    expense_list = []
     
-    try:
-        with open("expenses.csv", "r") as file:
-            lines = file.readlines()
+    for row in rows:
+        expense_list.append(
+            f"{row[0]} | {row[1]} | {row[2]} | {row[3]} - ₹{row[4]}"
+            )
 
-        if len(lines) == 0:
-            st.warning("No expenses to delete")
-
-        else:
-            expense_list = []
-
-            for i, line in enumerate(lines):
-                date_time, category, name, amount = line.strip().split(",")
-                expense_list.append(f"{i+1}. {date_time} | {category} | {name} - ₹{amount}")
-
-            selected = st.selectbox("Select expense to delete", expense_list)
-
-            if st.button("Delete"):
-
-                index = expense_list.index(selected)
-
-                lines.pop(index)
-
-                with open("expenses.csv", "w") as file:
-                    file.writelines(lines)
-
-                st.success("Expense deleted successfully!")
-    except FileNotFoundError:
+    if len(rows) == 0:
         st.warning("No expenses found")
+    else:
+        selected = st.selectbox("Select Expense", expense_list)
 
+    if len(rows) > 0 and st.button("Delete"):
+        expense_id = int(selected.split(" | ")[0])
 
+        cursor.execute(
+            "DELETE FROM expenses WHERE id = ?",
+            (expense_id,)
+            )
+            
+        conn.commit()
+        conn.close()   
+        st.success("Expense Deleted Successfully!")
+    
 
 elif menu == "Total Spendings":
     
-    try:
+    conn = get_connection()
+    cursor = conn.cursor()
 
-        total = 0
+    cursor.execute("SELECT date, category, description, amount FROM expenses")
+    rows = cursor.fetchall()
 
-        with open("expenses.csv", "r") as file:
-
-            reader = csv.reader(file)
-
-            next(reader)
-
-            found = False
-
-            for row in reader:
-
-                found = True
-
-                date_time, category, name, amount = row
-
-                st.write(
-                    f"{date_time} | {category} | {name} - ₹{amount}"
-                )
-
-                total += int(float(amount))
-
-        if not found:
-            st.warning("No expenses found")
-        else:
-            st.subheader(f"Total Spending: ₹{total}")
-
-    except FileNotFoundError:
+    if len(rows) == 0:
         st.warning("No expenses found")
+    else:
+        for row in rows:
+            date_time, category, name, amount = row
+            st.write(f"{date_time} | {category} | {name} - ₹{amount}")
+
+        cursor.execute("SELECT SUM(amount) FROM expenses")
+        total = cursor.fetchone()[0]
+
+        st.subheader(f"Total Spending: ₹{total}")
+
+    conn.close()
